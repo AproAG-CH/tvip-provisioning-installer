@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <TVIPProvision>
-  <Version>1.0</Version>
-  <Device>
-    <Vendor>TVIP</Vendor>
-    <Model>7xx</Model>
-  </Device>
-  <Provisioning>
-    <!-- Point the box to your TMS/AppStore/Portal as needed -->
-    <PortalURL>http://your-tms-or-portal.example.com</PortalURL>
-    <!-- Example WiFi config (optional)
-    <WiFi>
-      <SSID>MyWiFi</SSID>
-      <Password>SuperSecret</Password>
-      <Security>WPA2</Security>
-    </WiFi>
-    -->
-  </Provisioning>
+<Version>1.0</Version>
+<Device>
+<Vendor>TVIP</Vendor>
+<Model>7xx</Model>
+</Device>
+<Provisioning>
+<!-- Point the box to your TMS/AppStore/Portal as needed -->
+<PortalURL>http://your-tms-or-portal.example.com</PortalURL>
+<!-- Example WiFi config (optional)
+<WiFi>
+<SSID>MyWiFi</SSID>
+<Password>SuperSecret</Password>
+<Security>WPA2</Security>
+</WiFi>
+-->
+</Provisioning>
 </TVIPProvision>
