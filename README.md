@@ -1,14 +1,16 @@
-# TVIP Provisioning Server – Ubuntu 22.04 (HTTP only, Domain erforderlich)
+TVIP Provisioning Server – Ubuntu 22.04 Installer (GitHub-ready)
 
-Minimal installer für einen TVIP-Provisioning-Webserver (NGINX) auf Ubuntu 22.04.
+This is a starter repo in one file you can paste to GitHub. It includes:
 
-## Features
-- HTTP only (für LAN/Closed Networks) – **Domain (FQDN) ist Pflicht**
-- NGINX static hosting
-- **MAC-basiertes Mapping** über HTTP-Header (Standard: `MAC-Address`)
-- Canonical layout: `/var/www/provisioning/{prov,prov.mac}`
-- Idempotent & self‑elevating (fragt bei Bedarf sudo an)
+A production-friendly install.sh (idempotent) that sets up NGINX, folder structure prov/ and prov.mac/, self‑elevates to sudo when needed, and installs a ready-made server block with MAC-based rewrite logic (HTTP only).
 
+A matching NGINX vhost file.
+
+A minimal example tvip_provision.xml.
+
+A README.md with usage and a one-liner installer (HTTP only, no TLS).
+
+Replace all placeholder domains like provisioning.example.com with your actual hostname or IP.
 ## Quick start
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOURUSER/YOURREPO/main/install.sh -o install.sh
