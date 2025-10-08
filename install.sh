@@ -64,14 +64,14 @@ return 0
 
 
 prompt_domain() {
-while true; do
-read -rp "Domain (FQDN) für server_name (Pflicht, z.B. provisioning.example.com): " DOMAIN || true
-if is_valid_fqdn "$DOMAIN"; then
-break
-else
-echo "Ungültige Domain. Bitte eine FQDN ohne http:// und ohne IP eingeben."
-fi
-done
+  while true; do
+    read -rp "Domain (FQDN) für server_name (z.B. provisioning.example.com): " DOMAIN || true
+    if is_valid_fqdn "$DOMAIN"; then
+      break
+    else
+      echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
+    fi
+  done
 }
 
 
