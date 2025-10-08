@@ -1,16 +1,15 @@
+tee files/tvip_provision.xml >/dev/null <<'XML'
 <?xml version="1.0"?>
 <provision reload="3000">
   <update_server name="update.tvip.tv" />
   <provision_server name="http://{{DOMAIN}}" />
   <time tz="Europe/Zurich" ntp="pool.ntp.org" time_format="24" />
-
   <features>
     <tv enabled="true" />
     <mediaplayer enabled="true" />
     <dvr enabled="true" />
     <cctv enabled="true" />
   </features>
-
   <preferences>
     <pref_system visible="false" />
     <pref_appearance visible="false" />
@@ -20,3 +19,4 @@
     <pref_security visible="false" />
   </preferences>
 </provision>
+XML
