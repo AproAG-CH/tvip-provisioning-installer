@@ -1,19 +1,22 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<TVIPProvision>
-<Version>1.0</Version>
-<Device>
-<Vendor>TVIP</Vendor>
-<Model>7xx</Model>
-</Device>
-<Provisioning>
-<!-- Point the box to your TMS/AppStore/Portal as needed -->
-<PortalURL>http://your-tms-or-portal.example.com</PortalURL>
-<!-- Example WiFi config (optional)
-<WiFi>
-<SSID>MyWiFi</SSID>
-<Password>SuperSecret</Password>
-<Security>WPA2</Security>
-</WiFi>
--->
-</Provisioning>
-</TVIPProvision>
+<?xml version="1.0"?>
+<provision reload="3000">
+  <update_server name="update.tvip.tv" />
+  <provision_server name="http://{{DOMAIN}}" />
+  <time tz="Europe/Zurich" ntp="pool.ntp.org" time_format="24" />
+
+  <features>
+    <tv enabled="true" />
+    <mediaplayer enabled="true" />
+    <dvr enabled="true" />
+    <cctv enabled="true" />
+  </features>
+
+  <preferences>
+    <pref_system visible="false" />
+    <pref_appearance visible="false" />
+    <pref_network visible="false" />
+    <pref_display visible="false" />
+    <pref_tv visible="false" />
+    <pref_security visible="false" />
+  </preferences>
+</provision>
