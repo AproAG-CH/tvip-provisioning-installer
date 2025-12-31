@@ -11,12 +11,33 @@ die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
-# Optional: Root-Elevation korrekt auch bei Stdin
+# Pfad des Skripts (funktioniert auch bei symlinks; bei stdin-Fall fallback auf CWD)
+get_script_dir() {
+  local src="${BASH_SOURCE[0]:-}"
+  if [[ -n "$src" && -r "$src" ]]; then
+    local dir; dir="$(cd -- "$(dirname -- "$src")" && pwd -P)"
+    echo "$dir"
+  else
+    pwd -P
+  fi
+}
+SCRIPT_DIR="$(get_script_dir)"
+
+# Prompts immer vom Terminal lesen – unabhängig davon, ob stdin eine Pipe ist
+ask() {
+  # usage: ask "Frage: " VAR
+  local __prompt="$1"; shift
+  local __var="$1"; shift || true
+  local __input
+  read -rp "$__prompt" __input < /dev/tty || true
+  printf -v "$__var" '%s' "$__input"
+}
+
+# Root-Elevation – deckt Datei- und Stdin-Start ab
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "Please run as root (sudo)."
-    # Wenn von Datei gestartet, BASH_SOURCE verwenden; wenn über Stdin, /dev/stdin reinpipen
-    if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
+    if [[ -n "${BASH_SOURCE[0]:-}" && -r "${BASH_SOURCE[0]}" ]]; then
       exec sudo -E bash "${BASH_SOURCE[0]}" "$@"
     else
       exec sudo -E bash -s -- "$@" < /dev/stdin
@@ -47,8 +68,12 @@ is_valid_fqdn() {
 
 prompt_domain() {
   while true; do
-    read -rp "Domain (FQDN) für server_name: " DOMAIN || true
-    is_valid_fqdn "$DOMAIN" && break || echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
+    ask "Domain (FQDN) für server_name: " DOMAIN
+    if is_valid_fqdn "$DOMAIN"; then
+      break
+    else
+      echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
+    fi
   done
 }
 
@@ -61,9 +86,11 @@ apt_install() {
 check_port() {
   if ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":(?:${HTTP_PORT})$"; then
     warn "Port $HTTP_PORT ist belegt."
-    read -rp "(E) Abbrechen oder (A)usweichport verwenden [E/a]: " ans
+    local ans
+    ask "(E) Abbrechen oder (A)usweichport verwenden [E/a]: " ans
     if [[ "${ans,,}" == "a" ]]; then
-      read -rp "Neuer HTTP-Port (z.B. 8080): " HTTP_PORT
+      ask "Neuer HTTP-Port (z.B. 8080): " HTTP_PORT
+      [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] || die "Ungültiger Port."
     else
       die "Port $HTTP_PORT belegt – Installation abgebrochen."
     fi
@@ -80,9 +107,10 @@ prepare_dirs() {
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
   fi
 
-  # Render XML nur, wenn noch nicht vorhanden
+  # XML nur rendern, wenn noch nicht vorhanden
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
-    sed -e "s#{{DOMAIN}}#$DOMAIN#g" "$(dirname "${BASH_SOURCE[0]}")/files/tvip_provision.xml" \
+    sed -e "s#{{DOMAIN}}#$DOMAIN#g" \
+      "$SCRIPT_DIR/files/tvip_provision.xml" \
       > "$WEBROOT_BASE/prov/tvip_provision.xml"
     chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
     chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
@@ -93,7 +121,7 @@ install_nginx_vhost() {
   log "Installing NGINX vhost (minimal)"
   sed -e "s#{{WEBROOT_BASE}}#$WEBROOT_BASE#g" \
       -e "s#{{SERVER_NAME}}#$DOMAIN#g" \
-      "$(dirname "${BASH_SOURCE[0]}")/files/nginx-provisioning.conf" > "$VHOST_PATH"
+      "$SCRIPT_DIR/files/nginx-provisioning.conf" > "$VHOST_PATH"
 
   ln -sf "$VHOST_PATH" "$VHOST_LINK"
   rm -f /etc/nginx/sites-enabled/default || true
@@ -130,9 +158,17 @@ EOF
 main() {
   self_elevate "$@"
   parse_args "$@"
+
+  # Wenn nicht-interaktiv (kein TTY) und DOMAIN fehlt, sauber abbrechen
+  if ! [ -t 0 ] && [ -z "${DOMAIN:-}" ]; then
+    echo "[x] Nicht-interaktive Sitzung erkannt. Bitte mit --domain <fqdn> aufrufen." >&2
+    exit 2
+  fi
+
   is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
-  read -rp "[Enter] bestätigen / (n) neu: " ans
+  local ans
+  ask "[Enter] bestätigen / (n) neu: " ans
   [[ "${ans,,}" == n* ]] && prompt_domain
 
   apt_install
