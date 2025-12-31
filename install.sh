@@ -1,4 +1,3 @@
-tee install.sh >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -12,20 +11,25 @@ die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
+# Optional: Root-Elevation korrekt auch bei Stdin
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "Please run as root (sudo)."
-    echo "Re-running with sudo..."
-    exec sudo -E bash "$0" "$@"
+    # Wenn von Datei gestartet, BASH_SOURCE verwenden; wenn über Stdin, /dev/stdin reinpipen
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
+      exec sudo -E bash "${BASH_SOURCE[0]}" "$@"
+    else
+      exec sudo -E bash -s -- "$@" < /dev/stdin
+    fi
   fi
 }
 
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      -d|--domain) DOMAIN="$2"; shift 2 ;;
-      --http-port) HTTP_PORT="$2"; shift 2 ;;
-      --webroot)   WEBROOT_BASE="$2"; shift 2 ;;
+      -d|--domain) DOMAIN="${2:?}"; shift 2 ;;
+      --http-port) HTTP_PORT="${2:?}"; shift 2 ;;
+      --webroot)   WEBROOT_BASE="${2:?}"; shift 2 ;;
       -y|--yes)    export DEBIAN_FRONTEND=noninteractive; shift ;;
       *) warn "Unknown option: $1"; shift ;;
     esac
@@ -78,7 +82,8 @@ prepare_dirs() {
 
   # Render XML nur, wenn noch nicht vorhanden
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
-    sed -e "s#{{DOMAIN}}#$DOMAIN#g" files/tvip_provision.xml > "$WEBROOT_BASE/prov/tvip_provision.xml"
+    sed -e "s#{{DOMAIN}}#$DOMAIN#g" "$(dirname "${BASH_SOURCE[0]}")/files/tvip_provision.xml" \
+      > "$WEBROOT_BASE/prov/tvip_provision.xml"
     chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
     chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
   fi
@@ -88,7 +93,7 @@ install_nginx_vhost() {
   log "Installing NGINX vhost (minimal)"
   sed -e "s#{{WEBROOT_BASE}}#$WEBROOT_BASE#g" \
       -e "s#{{SERVER_NAME}}#$DOMAIN#g" \
-      files/nginx-provisioning.conf > "$VHOST_PATH"
+      "$(dirname "${BASH_SOURCE[0]}")/files/nginx-provisioning.conf" > "$VHOST_PATH"
 
   ln -sf "$VHOST_PATH" "$VHOST_LINK"
   rm -f /etc/nginx/sites-enabled/default || true
@@ -139,5 +144,3 @@ main() {
 }
 
 main "$@"
-SH
-chmod +x install.sh
