@@ -7,39 +7,39 @@ VHOST_PATH="/etc/nginx/sites-available/provisioning.conf"
 VHOST_LINK="/etc/nginx/sites-enabled/provisioning.conf"
 DOMAIN=""
 
+# Für Raw-Downloads der Templates (falls nicht lokal vorhanden)
+RAW_BASE="https://raw.githubusercontent.com/AproAG-CH/tvip-provisioning-installer/main/files"
+
 die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
-# Pfad des Skripts (funktioniert auch bei symlinks; bei stdin-Fall fallback auf CWD)
-get_script_dir() {
-  local src="${BASH_SOURCE[0]:-}"
-  if [[ -n "$src" && -r "$src" ]]; then
-    local dir; dir="$(cd -- "$(dirname -- "$src")" && pwd -P)"
-    echo "$dir"
-  else
-    pwd -P
-  fi
-}
-SCRIPT_DIR="$(get_script_dir)"
-
-# Prompts immer vom Terminal lesen – unabhängig davon, ob stdin eine Pipe ist
+# stdin/TTY-sichere Eingabe
 ask() {
-  # usage: ask "Frage: " VAR
-  local __prompt="$1"; shift
-  local __var="$1"; shift || true
-  local __input
-  read -rp "$__prompt" __input < /dev/tty || true
-  printf -v "$__var" '%s' "$__input"
+  local prompt="$1"
+  local var
+  if [ -t 0 ]; then
+    # interaktiv
+    read -rp "$prompt" var || true
+  else
+    # piped: lese von /dev/tty
+    if [ -r /dev/tty ]; then
+      read -rp "$prompt" var < /dev/tty || true
+    else
+      die "Kein TTY für Eingaben verfügbar. Bitte mit --domain <fqdn> aufrufen."
+    fi
+  fi
+  printf '%s' "${var}"
 }
 
-# Root-Elevation – deckt Datei- und Stdin-Start ab
+# Root-Elevation robust, auch wenn Script über stdin kommt
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    command -v sudo >/dev/null 2>&1 || die "Please run as root (sudo)."
-    if [[ -n "${BASH_SOURCE[0]:-}" && -r "${BASH_SOURCE[0]}" ]]; then
+    command -v sudo >/dev/null 2>&1 || die "Bitte als root (sudo) ausführen."
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
       exec sudo -E bash "${BASH_SOURCE[0]}" "$@"
     else
+      # gepiped
       exec sudo -E bash -s -- "$@" < /dev/stdin
     fi
   fi
@@ -52,7 +52,7 @@ parse_args() {
       --http-port) HTTP_PORT="${2:?}"; shift 2 ;;
       --webroot)   WEBROOT_BASE="${2:?}"; shift 2 ;;
       -y|--yes)    export DEBIAN_FRONTEND=noninteractive; shift ;;
-      *) warn "Unknown option: $1"; shift ;;
+      *) warn "Unbekannte Option: $1"; shift ;;
     esac
   done
 }
@@ -68,12 +68,8 @@ is_valid_fqdn() {
 
 prompt_domain() {
   while true; do
-    ask "Domain (FQDN) für server_name: " DOMAIN
-    if is_valid_fqdn "$DOMAIN"; then
-      break
-    else
-      echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
-    fi
+    DOMAIN="$(ask 'Domain (FQDN) für server_name: ')"
+    is_valid_fqdn "$DOMAIN" && break || echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
   done
 }
 
@@ -87,14 +83,35 @@ check_port() {
   if ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":(?:${HTTP_PORT})$"; then
     warn "Port $HTTP_PORT ist belegt."
     local ans
-    ask "(E) Abbrechen oder (A)usweichport verwenden [E/a]: " ans
+    ans="$(ask '(E) Abbrechen oder (A)usweichport verwenden [E/a]: ')"
     if [[ "${ans,,}" == "a" ]]; then
-      ask "Neuer HTTP-Port (z.B. 8080): " HTTP_PORT
-      [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] || die "Ungültiger Port."
+      HTTP_PORT="$(ask 'Neuer HTTP-Port (z.B. 8080): ')"
     else
       die "Port $HTTP_PORT belegt – Installation abgebrochen."
     fi
   fi
+}
+
+# Template aus Repo-Datei ODER von GitHub Raw holen
+# $1: lokaler relativer Pfad (bezogen auf Scriptdir), $2: Fallback-URL (RAW)
+ensure_template() {
+  local rel="$1" url="$2" out="$3"
+  local basedir=""
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    basedir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  else
+    basedir="$(pwd -P)"
+  fi
+  local localfile="$basedir/$rel"
+
+  if [ -r "$localfile" ]; then
+    cat "$localfile" > "$out"
+    return
+  fi
+
+  # Fallback: aus RAW laden
+  curl -fsSL "$url" -o "$out" \
+    || die "Konnte Template nicht laden: $url"
 }
 
 prepare_dirs() {
@@ -107,11 +124,15 @@ prepare_dirs() {
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
   fi
 
-  # XML nur rendern, wenn noch nicht vorhanden
+  # Default-XML rendern (falls noch nicht vorhanden)
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
-    sed -e "s#{{DOMAIN}}#$DOMAIN#g" \
-      "$SCRIPT_DIR/files/tvip_provision.xml" \
-      > "$WEBROOT_BASE/prov/tvip_provision.xml"
+    local tmpxml
+    tmpxml="$(mktemp)"
+    ensure_template "files/tvip_provision.xml" \
+      "${RAW_BASE}/tvip_provision.xml" \
+      "$tmpxml"
+    sed -e "s#{{DOMAIN}}#$DOMAIN#g" "$tmpxml" > "$WEBROOT_BASE/prov/tvip_provision.xml"
+    rm -f "$tmpxml"
     chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
     chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
   fi
@@ -119,9 +140,16 @@ prepare_dirs() {
 
 install_nginx_vhost() {
   log "Installing NGINX vhost (minimal)"
+  local tmpvhost
+  tmpvhost="$(mktemp)"
+  ensure_template "files/nginx-provisioning.conf" \
+    "${RAW_BASE}/nginx-provisioning.conf" \
+    "$tmpvhost"
+
   sed -e "s#{{WEBROOT_BASE}}#$WEBROOT_BASE#g" \
       -e "s#{{SERVER_NAME}}#$DOMAIN#g" \
-      "$SCRIPT_DIR/files/nginx-provisioning.conf" > "$VHOST_PATH"
+      "$tmpvhost" > "$VHOST_PATH"
+  rm -f "$tmpvhost"
 
   ln -sf "$VHOST_PATH" "$VHOST_LINK"
   rm -f /etc/nginx/sites-enabled/default || true
@@ -159,16 +187,12 @@ main() {
   self_elevate "$@"
   parse_args "$@"
 
-  # Wenn nicht-interaktiv (kein TTY) und DOMAIN fehlt, sauber abbrechen
-  if ! [ -t 0 ] && [ -z "${DOMAIN:-}" ]; then
-    echo "[x] Nicht-interaktive Sitzung erkannt. Bitte mit --domain <fqdn> aufrufen." >&2
-    exit 2
+  if ! is_valid_fqdn "$DOMAIN"; then
+    prompt_domain
   fi
-
-  is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
   local ans
-  ask "[Enter] bestätigen / (n) neu: " ans
+  ans="$(ask '[Enter] bestätigen / (n) neu: ')"
   [[ "${ans,,}" == n* ]] && prompt_domain
 
   apt_install
