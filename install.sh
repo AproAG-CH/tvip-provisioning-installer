@@ -1,4 +1,3 @@
-tee install.sh >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -11,6 +10,10 @@ DOMAIN=""
 die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
+
+# Script-/Templates-Pfad
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FILES_DIR="$SCRIPT_DIR/files"
 
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -66,6 +69,18 @@ check_port() {
   fi
 }
 
+ensure_templates() {
+  # Falls files/ im Checkout fehlt (oder bei curl | bash) → von GitHub ziehen
+  if [ ! -f "${FILES_DIR}/tvip_provision.xml" ] || [ ! -f "${FILES_DIR}/nginx-provisioning.conf" ]; then
+    log "Templates nicht lokal gefunden – lade von GitHub…"
+    mkdir -p "${FILES_DIR}"
+    curl -fsSL "https://raw.githubusercontent.com/AproAG-CH/tvip-provisioning-installer/main/files/tvip_provision.xml" \
+      -o "${FILES_DIR}/tvip_provision.xml"
+    curl -fsSL "https://raw.githubusercontent.com/AproAG-CH/tvip-provisioning-installer/main/files/nginx-provisioning.conf" \
+      -o "${FILES_DIR}/nginx-provisioning.conf"
+  fi
+}
+
 prepare_dirs() {
   log "Preparing webroot at $WEBROOT_BASE"
   mkdir -p "$WEBROOT_BASE/html" "$WEBROOT_BASE/prov" "$WEBROOT_BASE/prov.mac"
@@ -74,11 +89,11 @@ prepare_dirs() {
   if [ ! -f "$WEBROOT_BASE/html/index.html" ]; then
     echo "TVIP Provisioning OK" > "$WEBROOT_BASE/html/index.html"
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
-  fi
+  end fi
 
-  # Render XML nur, wenn noch nicht vorhanden
+  # Default-XML rendern, falls nicht vorhanden
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
-    sed -e "s#{{DOMAIN}}#$DOMAIN#g" files/tvip_provision.xml > "$WEBROOT_BASE/prov/tvip_provision.xml"
+    sed -e "s#{{DOMAIN}}#$DOMAIN#g" "${FILES_DIR}/tvip_provision.xml" > "$WEBROOT_BASE/prov/tvip_provision.xml"
     chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
     chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
   fi
@@ -86,9 +101,18 @@ prepare_dirs() {
 
 install_nginx_vhost() {
   log "Installing NGINX vhost (minimal)"
+  # Grundkonfiguration aus Template
   sed -e "s#{{WEBROOT_BASE}}#$WEBROOT_BASE#g" \
       -e "s#{{SERVER_NAME}}#$DOMAIN#g" \
-      files/nginx-provisioning.conf > "$VHOST_PATH"
+      "${FILES_DIR}/nginx-provisioning.conf" > "$VHOST_PATH"
+
+  # Wenn nicht Port 80, fügen wir listen-Direktiven hinzu
+  if [ "$HTTP_PORT" != "80" ]; then
+    awk -v p="$HTTP_PORT" '
+      /server[[:space:]]*\{/ && !ins { print; print "    listen "p";\n    listen [::]:"p";"; ins=1; next }
+      { print }
+    ' "$VHOST_PATH" > "${VHOST_PATH}.tmp" && mv "${VHOST_PATH}.tmp" "$VHOST_PATH"
+  fi
 
   ln -sf "$VHOST_PATH" "$VHOST_LINK"
   rm -f /etc/nginx/sites-enabled/default || true
@@ -132,6 +156,7 @@ main() {
 
   apt_install
   check_port
+  ensure_templates
   prepare_dirs
   install_nginx_vhost
   configure_firewall
@@ -139,5 +164,3 @@ main() {
 }
 
 main "$@"
-SH
-chmod +x install.sh
