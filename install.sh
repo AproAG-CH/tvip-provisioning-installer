@@ -120,7 +120,6 @@ check_port() {
       fi
     else
       die "Port $HTTP_PORT belegt – nicht-interaktiv keine Nachfrage möglich."
-    end
   fi
 }
 
