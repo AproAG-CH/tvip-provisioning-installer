@@ -11,7 +11,7 @@ die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
-# --- Eingebettete Templates -----------------------------------------------
+# --- Eingebettete Templates ---------------------------------------------------
 template_xml() {
 cat <<'XML'
 <?xml version="1.0"?>
@@ -36,6 +36,7 @@ cat <<'XML'
 XML
 }
 
+# NGINX: sauberes MAC-Routing mit try_files und Regex-Location
 template_nginx() {
 cat <<'NGINX'
 server {
@@ -43,22 +44,38 @@ server {
     listen [::]:{{HTTP_PORT}};
     server_name {{SERVER_NAME}} www.{{SERVER_NAME}};
 
-    root {{WEBROOT_BASE}}/html;
-    index index.html index.htm index.nginx-debian.html;
+    # Globaler Webroot zeigt auf Basis, Index liegt darunter in html/
+    root {{WEBROOT_BASE}};
+    index html/index.html index.html;
 
-    # MAC-basierte Umschreibung: wenn Ordner für MAC existiert -> /prov.mac/<MAC>/...
-    if ($http_mac_address) { set $tvipmac M; }
-    if ( -d "{{WEBROOT_BASE}}/prov.mac/$http_mac_address/" ) { set $tvipres F$tvipmac; }
-    if ( $tvipres = FM ) { rewrite ^/prov/(.*)$ /prov.mac/$http_mac_address/$1 break; }
+    # Startseite
+    location = / {
+        try_files /html/index.html =404;
+    }
 
-    location /prov.mac/ { root {{WEBROOT_BASE}}; }
-    location /prov/     { root {{WEBROOT_BASE}}; }
+    # Statische Auslieferung (falls benötigt)
+    location /html/ { try_files $uri =404; }
+    location /prov/ { try_files $uri =404; }
+    location /prov.mac/ { try_files $uri =404; }
+
+    # Provisioning: bevorzugt per-MAC-Datei, sonst Default
+    # Beispiel: GET /prov/tvip_provision.xml
+    location ~ ^/prov/(?<rest>.*)$ {
+        # Erwartete Dateien:
+        #   /prov.mac/$http_mac_address/$rest
+        #   /prov/$rest
+        try_files /prov.mac/$http_mac_address/$rest /prov/$rest =404;
+    }
+
+    # Einfache Logs (optional abschalten)
+    access_log /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log warn;
 }
 NGINX
 }
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
-# Optional: Root-Elevation (auch wenn per Stdin gestartet)
+# Root-Elevation (funktioniert auch bei Pipe-Start)
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "Please run as root (sudo)."
@@ -91,13 +108,22 @@ is_valid_fqdn() {
   return 0
 }
 
-prompt_domain() {
-  # Wenn kein TTY vorhanden (z. B. CI / restriktive Shell): hart abbrechen
-  if [ ! -t 0 ]; then
-    die "Nicht-interaktive Sitzung erkannt. Bitte mit --domain <fqdn> aufrufen."
+# Liest Eingaben IMMER vom echten Terminal (/dev/tty), auch wenn das Skript aus einer Pipe kommt
+read_tty() {
+  local prompt="$1" outvar="$2"
+  if exec 3</dev/tty 2>/dev/null; then
+    printf "%s" "$prompt" >&3
+    IFS= read -r REPLY <&3 || die "Keine Eingabe möglich."
+    printf -v "$outvar" "%s" "$REPLY"
+    exec 3<&-
+  else
+    die "Kein TTY verfügbar. Alternativ per Flag übergeben (z. B. --domain <fqdn>)."
   fi
+}
+
+prompt_domain() {
   while true; do
-    read -rp "Domain (FQDN) für server_name: " DOMAIN || true
+    read_tty "Domain (FQDN) für server_name: " DOMAIN
     is_valid_fqdn "$DOMAIN" && break || echo "Ungültig. Bitte FQDN ohne http:// und ohne IP."
   done
 }
@@ -105,21 +131,19 @@ prompt_domain() {
 apt_install() {
   log "Installing packages..."
   apt-get update -y
-  apt-get install -y --no-install-recommends nginx curl ca-certificates acl
+  # iproute2 für 'ss', ufw optional vorhanden
+  apt-get install -y --no-install-recommends nginx curl ca-certificates acl iproute2
 }
 
 check_port() {
   if ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":(?:${HTTP_PORT})$"; then
     warn "Port $HTTP_PORT ist belegt."
-    if [ -t 0 ]; then
-      read -rp "(E) Abbrechen oder (A)usweichport verwenden [E/a]: " ans
-      if [[ "${ans,,}" == "a" ]]; then
-        read -rp "Neuer HTTP-Port (z.B. 8080): " HTTP_PORT
-      else
-        die "Port $HTTP_PORT belegt – Installation abgebrochen."
-      fi
+    local ans=""
+    read_tty "(E) Abbrechen oder (A)usweichport verwenden [E/a]: " ans
+    if [[ "${ans,,}" == "a" ]]; then
+      read_tty "Neuer HTTP-Port (z.B. 8080): " HTTP_PORT
     else
-      die "Port $HTTP_PORT belegt – nicht-interaktiv keine Nachfrage möglich."
+      die "Port $HTTP_PORT belegt – Installation abgebrochen."
     fi
   fi
 }
@@ -137,7 +161,6 @@ prepare_dirs() {
   # Render XML (nur wenn noch nicht vorhanden)
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
     template_xml | sed -e "s#{{DOMAIN}}#$DOMAIN#g" > "$WEBROOT_BASE/prov/tvip_provision.xml"
-    # Sicherstellen, dass nicht leer
     [ -s "$WEBROOT_BASE/prov/tvip_provision.xml" ] || die "Rendering tvip_provision.xml fehlgeschlagen."
     chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
     chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
@@ -183,18 +206,23 @@ Domain:    $DOMAIN
 HTTP:      http://$DOMAIN:${HTTP_PORT}/
 Config:    $VHOST_PATH
 Logs:      /var/log/nginx/access.log, /var/log/nginx/error.log
+
+Schnelltest lokal (Host-Header):
+  curl -I -H "Host: $DOMAIN" http://127.0.0.1/
+  curl -I -H "Host: $DOMAIN" http://127.0.0.1/prov/tvip_provision.xml
 EOF
 }
 
 main() {
   self_elevate "$@"
   parse_args "$@"
+
   is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
-  if [ -t 0 ]; then
-    read -rp "[Enter] bestätigen / (n) neu: " ans
-    [[ "${ans,,}" == n* ]] && prompt_domain
-  fi
+  # Bestätigung (optional)
+  local ans=""
+  read_tty "[Enter] bestätigen / (n) neu: " ans || true
+  [[ "${ans,,}" == n* ]] && prompt_domain
 
   apt_install
   check_port
