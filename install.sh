@@ -67,7 +67,6 @@ server {
         try_files /prov.mac/$http_mac_address/$rest /prov/$rest =404;
     }
 
-    # Einfache Logs (optional abschalten)
     access_log /var/log/nginx/access.log;
     error_log  /var/log/nginx/error.log warn;
 }
@@ -110,12 +109,12 @@ is_valid_fqdn() {
 
 # Liest Eingaben IMMER vom echten Terminal (/dev/tty), auch wenn das Skript aus einer Pipe kommt
 read_tty() {
-  local prompt="$1" outvar="$2"
-  if exec 3</dev/tty 2>/dev/null; then
+  local prompt="$1" outvar="$2" reply
+  if exec 3<>/dev/tty 2>/dev/null; then  # RW öffnen
     printf "%s" "$prompt" >&3
-    IFS= read -r REPLY <&3 || die "Keine Eingabe möglich."
-    printf -v "$outvar" "%s" "$REPLY"
-    exec 3<&-
+    IFS= read -r reply <&3 || { exec 3>&- 3<&-; die "Keine Eingabe möglich."; }
+    printf -v "$outvar" "%s" "$reply"
+    exec 3>&- 3<&-  # sauber schließen
   else
     die "Kein TTY verfügbar. Alternativ per Flag übergeben (z. B. --domain <fqdn>)."
   fi
@@ -131,7 +130,7 @@ prompt_domain() {
 apt_install() {
   log "Installing packages..."
   apt-get update -y
-  # iproute2 für 'ss', ufw optional vorhanden
+  # iproute2 für 'ss'
   apt-get install -y --no-install-recommends nginx curl ca-certificates acl iproute2
 }
 
@@ -219,7 +218,7 @@ main() {
 
   is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
-  # Bestätigung (optional)
+  # optionale Bestätigung
   local ans=""
   read_tty "[Enter] bestätigen / (n) neu: " ans || true
   [[ "${ans,,}" == n* ]] && prompt_domain
