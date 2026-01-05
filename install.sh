@@ -11,7 +11,7 @@ die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
-# --- Minimal-Templates (ohne Kommentare im Ziel-File) -------------------------
+# -------------------- Eingebettete Templates --------------------
 template_xml() {
 cat <<'XML'
 <?xml version="1.0"?>
@@ -39,30 +39,24 @@ XML
 template_nginx() {
 cat <<'NGINX'
 server {
-    listen {{HTTP_PORT}};
-    listen [::]:{{HTTP_PORT}};
+    listen {{HTTP_PORT}} default_server;
+    listen [::]:{{HTTP_PORT}} default_server;
+
     server_name {{SERVER_NAME}} www.{{SERVER_NAME}};
-    root {{WEBROOT_BASE}};
-    index html/index.html index.html;
 
-    location = / {
-        try_files /html/index.html =404;
-    }
+    root {{WEBROOT_BASE}}/html;
+    index index.html index.htm;
 
-    location /html/ { try_files $uri =404; }
-    location /prov/ { try_files $uri =404; }
-    location /prov.mac/ { try_files $uri =404; }
+    if ($http_mac_address) { set $tvipmac M; }
+    if (-d "{{WEBROOT_BASE}}/prov.mac/$http_mac_address/") { set $tvipres F$tvipmac; }
+    if ($tvipres = FM) { rewrite ^/prov/(.*)$ /prov.mac/$http_mac_address/$1 break; }
 
-    location ~ ^/prov/(?<rest>.*)$ {
-        try_files /prov.mac/$http_mac_address/$rest /prov/$rest =404;
-    }
-
-    access_log /var/log/nginx/access.log;
-    error_log  /var/log/nginx/error.log warn;
+    location /prov.mac/ { alias {{WEBROOT_BASE}}/prov.mac/; }
+    location /prov/     { alias {{WEBROOT_BASE}}/prov/;    }
 }
 NGINX
 }
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------
 
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -96,7 +90,6 @@ is_valid_fqdn() {
   return 0
 }
 
-# liest immer vom echten TTY, auch wenn das Skript über eine Pipe läuft
 read_tty() {
   local prompt="$1" outvar="$2" reply
   if exec 3<>/dev/tty 2>/dev/null; then
@@ -141,7 +134,7 @@ prepare_dirs() {
   chown -R www-data:www-data "$WEBROOT_BASE" || true
 
   if [ ! -f "$WEBROOT_BASE/html/index.html" ]; then
-    echo "TVIP Provisioning OK" > "$WEBROOT_BASE/html/index.html"
+    printf "OK\n" > "$WEBROOT_BASE/html/index.html"
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
   fi
 
@@ -181,13 +174,12 @@ summary() {
   cat <<EOF
 
 ============================================================
- TVIP Provisioning Server – Installation Complete (HTTP)
+Provisioning Server – Installation Complete (HTTP)
 ============================================================
 Webroot:   $WEBROOT_BASE
 Default:   $WEBROOT_BASE/prov/tvip_provision.xml
 Per-MAC:   $WEBROOT_BASE/prov.mac/<MAC>/tvip_provision.xml
 Domain:    $DOMAIN
-
 HTTP:      http://$DOMAIN:${HTTP_PORT}/
 Config:    $VHOST_PATH
 Logs:      /var/log/nginx/access.log, /var/log/nginx/error.log
@@ -197,6 +189,7 @@ EOF
 main() {
   self_elevate "$@"
   parse_args "$@"
+
   is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
   local ans=""
