@@ -11,7 +11,7 @@ die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
 warn(){ echo "[!] $*"; }
 
-# --- Eingebettete Templates ---------------------------------------------------
+# --- Minimal-Templates (ohne Kommentare im Ziel-File) -------------------------
 template_xml() {
 cat <<'XML'
 <?xml version="1.0"?>
@@ -36,34 +36,24 @@ cat <<'XML'
 XML
 }
 
-# NGINX: sauberes MAC-Routing mit try_files und Regex-Location
 template_nginx() {
 cat <<'NGINX'
 server {
     listen {{HTTP_PORT}};
     listen [::]:{{HTTP_PORT}};
     server_name {{SERVER_NAME}} www.{{SERVER_NAME}};
-
-    # Globaler Webroot zeigt auf Basis, Index liegt darunter in html/
     root {{WEBROOT_BASE}};
     index html/index.html index.html;
 
-    # Startseite
     location = / {
         try_files /html/index.html =404;
     }
 
-    # Statische Auslieferung (falls benötigt)
     location /html/ { try_files $uri =404; }
     location /prov/ { try_files $uri =404; }
     location /prov.mac/ { try_files $uri =404; }
 
-    # Provisioning: bevorzugt per-MAC-Datei, sonst Default
-    # Beispiel: GET /prov/tvip_provision.xml
     location ~ ^/prov/(?<rest>.*)$ {
-        # Erwartete Dateien:
-        #   /prov.mac/$http_mac_address/$rest
-        #   /prov/$rest
         try_files /prov.mac/$http_mac_address/$rest /prov/$rest =404;
     }
 
@@ -74,7 +64,6 @@ NGINX
 }
 # ------------------------------------------------------------------------------
 
-# Root-Elevation (funktioniert auch bei Pipe-Start)
 self_elevate() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "Please run as root (sudo)."
@@ -107,14 +96,14 @@ is_valid_fqdn() {
   return 0
 }
 
-# Liest Eingaben IMMER vom echten Terminal (/dev/tty), auch wenn das Skript aus einer Pipe kommt
+# liest immer vom echten TTY, auch wenn das Skript über eine Pipe läuft
 read_tty() {
   local prompt="$1" outvar="$2" reply
-  if exec 3<>/dev/tty 2>/dev/null; then  # RW öffnen
+  if exec 3<>/dev/tty 2>/dev/null; then
     printf "%s" "$prompt" >&3
     IFS= read -r reply <&3 || { exec 3>&- 3<&-; die "Keine Eingabe möglich."; }
     printf -v "$outvar" "%s" "$reply"
-    exec 3>&- 3<&-  # sauber schließen
+    exec 3>&- 3<&-
   else
     die "Kein TTY verfügbar. Alternativ per Flag übergeben (z. B. --domain <fqdn>)."
   fi
@@ -130,7 +119,6 @@ prompt_domain() {
 apt_install() {
   log "Installing packages..."
   apt-get update -y
-  # iproute2 für 'ss'
   apt-get install -y --no-install-recommends nginx curl ca-certificates acl iproute2
 }
 
@@ -157,7 +145,6 @@ prepare_dirs() {
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
   fi
 
-  # Render XML (nur wenn noch nicht vorhanden)
   if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
     template_xml | sed -e "s#{{DOMAIN}}#$DOMAIN#g" > "$WEBROOT_BASE/prov/tvip_provision.xml"
     [ -s "$WEBROOT_BASE/prov/tvip_provision.xml" ] || die "Rendering tvip_provision.xml fehlgeschlagen."
@@ -167,7 +154,7 @@ prepare_dirs() {
 }
 
 install_nginx_vhost() {
-  log "Installing NGINX vhost (minimal)"
+  log "Installing NGINX vhost"
   template_nginx \
     | sed -e "s#{{WEBROOT_BASE}}#$WEBROOT_BASE#g" \
           -e "s#{{SERVER_NAME}}#$DOMAIN#g" \
@@ -175,7 +162,6 @@ install_nginx_vhost() {
     > "$VHOST_PATH"
 
   [ -s "$VHOST_PATH" ] || die "Rendering provisioning.conf fehlgeschlagen."
-
   ln -sf "$VHOST_PATH" "$VHOST_LINK"
   rm -f /etc/nginx/sites-enabled/default || true
 
@@ -205,20 +191,14 @@ Domain:    $DOMAIN
 HTTP:      http://$DOMAIN:${HTTP_PORT}/
 Config:    $VHOST_PATH
 Logs:      /var/log/nginx/access.log, /var/log/nginx/error.log
-
-Schnelltest lokal (Host-Header):
-  curl -I -H "Host: $DOMAIN" http://127.0.0.1/
-  curl -I -H "Host: $DOMAIN" http://127.0.0.1/prov/tvip_provision.xml
 EOF
 }
 
 main() {
   self_elevate "$@"
   parse_args "$@"
-
   is_valid_fqdn "$DOMAIN" || prompt_domain
   echo "Verwenden: $DOMAIN"
-  # optionale Bestätigung
   local ans=""
   read_tty "[Enter] bestätigen / (n) neu: " ans || true
   [[ "${ans,,}" == n* ]] && prompt_domain
