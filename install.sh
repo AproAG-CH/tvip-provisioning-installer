@@ -6,6 +6,7 @@ WEBROOT_BASE="/var/www/provisioning"
 VHOST_PATH="/etc/nginx/sites-available/provisioning.conf"
 VHOST_LINK="/etc/nginx/sites-enabled/provisioning.conf"
 DOMAIN=""
+FORCE_XML=0
 
 die(){ echo "[x] $*" >&2; exit 1; }
 log(){ echo "[+] $*"; }
@@ -75,6 +76,7 @@ parse_args() {
       -d|--domain) DOMAIN="${2:?}"; shift 2 ;;
       --http-port) HTTP_PORT="${2:?}"; shift 2 ;;
       --webroot)   WEBROOT_BASE="${2:?}"; shift 2 ;;
+      --force-xml) FORCE_XML=1; shift ;;
       -y|--yes)    export DEBIAN_FRONTEND=noninteractive; shift ;;
       *) warn "Unknown option: $1"; shift ;;
     esac
@@ -128,6 +130,10 @@ check_port() {
   fi
 }
 
+render_default_xml() {
+  template_xml | sed -e "s#{{DOMAIN}}#$DOMAIN#g"
+}
+
 prepare_dirs() {
   log "Preparing webroot at $WEBROOT_BASE"
   mkdir -p "$WEBROOT_BASE/html" "$WEBROOT_BASE/prov" "$WEBROOT_BASE/prov.mac"
@@ -138,11 +144,13 @@ prepare_dirs() {
     chown www-data:www-data "$WEBROOT_BASE/html/index.html" || true
   fi
 
-  if [ ! -f "$WEBROOT_BASE/prov/tvip_provision.xml" ]; then
-    template_xml | sed -e "s#{{DOMAIN}}#$DOMAIN#g" > "$WEBROOT_BASE/prov/tvip_provision.xml"
-    [ -s "$WEBROOT_BASE/prov/tvip_provision.xml" ] || die "Rendering tvip_provision.xml fehlgeschlagen."
-    chown www-data:www-data "$WEBROOT_BASE/prov/tvip_provision.xml" || true
-    chmod 0644 "$WEBROOT_BASE/prov/tvip_provision.xml" || true
+  local xml="$WEBROOT_BASE/prov/tvip_provision.xml"
+  if [ "$FORCE_XML" -eq 1 ] || [ ! -s "$xml" ] || ! head -n1 "$xml" 2>/dev/null | grep -q '^<\?xml'; then
+    local tmp="${xml}.tmp.$$"
+    render_default_xml > "$tmp" || die "Rendering tvip_provision.xml fehlgeschlagen."
+    mv -f "$tmp" "$xml"
+    chown www-data:www-data "$xml" || true
+    chmod 0644 "$xml" || true
   fi
 }
 
