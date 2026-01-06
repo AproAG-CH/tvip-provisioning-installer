@@ -52,8 +52,8 @@ server {
     if (-d "{{WEBROOT_BASE}}/prov.mac/$http_mac_address/") { set $tvipres F$tvipmac; }
     if ($tvipres = FM) { rewrite ^/prov/(.*)$ /prov.mac/$http_mac_address/$1 break; }
 
-    location /prov.mac/ { alias {{WEBROOT_BASE}}/prov.mac/; }
-    location /prov/     { alias {{WEBROOT_BASE}}/prov/;    }
+    location /prov.mac/ { root {{WEBROOT_BASE}}; }
+    location /prov/     { root {{WEBROOT_BASE}}; }
 }
 NGINX
 }
