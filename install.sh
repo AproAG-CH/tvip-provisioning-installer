@@ -26,12 +26,12 @@ cat <<'XML'
     <cctv enabled="true" />
   </features>
   <preferences>
-    <pref_system visible="false" />
-    <pref_appearance visible="false" />
-    <pref_network visible="false" />
-    <pref_display visible="false" />
-    <pref_tv visible="false" />
-    <pref_security visible="false" />
+    <pref_system visible="true" />
+    <pref_appearance visible="true" />
+    <pref_network visible="true" />
+    <pref_display visible="true" />
+    <pref_tv visible="true" />
+    <pref_security visible="true" />
   </preferences>
 </provision>
 XML
